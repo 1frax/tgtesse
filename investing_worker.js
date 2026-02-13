@@ -1,5 +1,6 @@
 require("dotenv").config();
 const axios = require("axios");
+const http = require("http");
 const { chromium } = require("playwright");
 const db = require("./db");
 const OpenAI = require("openai");
@@ -522,6 +523,15 @@ async function runJobsLoop() {
   }
 }
 
+function startWorkerHealthServer() {
+  const port = Number(process.env.PORT || 3000);
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+    res.end("OK - WORKER RUNNING");
+  });
+  server.listen(port, () => console.log(`[OK] Worker health server on ${port}`));
+}
+
 function printDoctor() {
   const checks = [
     ["DATABASE_URL", !!process.env.DATABASE_URL],
@@ -550,6 +560,7 @@ if (process.argv.includes("--doctor")) {
       process.exit(1);
     });
 } else if (process.argv.includes("--jobs")) {
+  startWorkerHealthServer();
   runJobsLoop().catch((e) => {
     console.error("[ERROR] worker --jobs:", e.message);
     process.exit(1);
