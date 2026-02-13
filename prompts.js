@@ -74,6 +74,8 @@ function onDemandTickerPrompt({
   marketPulseLines,
   tickerNewsLines,
   currentPrice,
+  dailyChangeValue,
+  dailyChangePercent,
   supports,
   resistances,
 }) {
@@ -92,6 +94,9 @@ ${tickerNewsLines || "Sin noticias recientes del ticker."}
 Precio actual:
 ${currentPrice || "N/D"}
 
+Cambio diario:
+${dailyChangeValue || "N/D"} (${dailyChangePercent || "N/D"})
+
 Soportes detectados:
 ${supports || "N/D"}
 
@@ -100,11 +105,12 @@ ${resistances || "N/D"}
 
 Formato obligatorio:
 1) TL;DR
-2) Pulso general de mercado (3-5 bullets)
-3) Que esta pasando con ${ticker} (drivers concretos)
-4) Setup tecnico: soportes/resistencias + escenarios alcista/base/bajista + invalidacion
-5) Checklist operativo 1-4 horas (riesgo, gatillos, evento clave)
-6) Nota de riesgo (educativo, no asesoria financiera)
+2) Precio y cambio diario (${ticker})
+3) Pulso general de mercado (3-5 bullets)
+4) Que esta pasando con ${ticker} (drivers concretos)
+5) Setup tecnico: soportes/resistencias + escenarios alcista/base/bajista + invalidacion
+6) Checklist operativo 1-4 horas (riesgo, gatillos, evento clave)
+7) Nota de riesgo (educativo, no asesoria financiera)
 `.trim();
 }
 

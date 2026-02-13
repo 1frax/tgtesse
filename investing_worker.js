@@ -316,6 +316,23 @@ async function fetchQuote(ticker) {
   return r.data || null;
 }
 
+function formatSigned(value, decimals = 2) {
+  if (typeof value !== "number" || Number.isNaN(value)) return "N/D";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(decimals)}`;
+}
+
+function formatPriceLine(ticker, quote) {
+  if (!quote || typeof quote.c !== "number" || Number.isNaN(quote.c)) {
+    return `💵 *${ticker}* | Precio: N/D | Cambio diario: N/D`;
+  }
+
+  const price = quote.c.toFixed(2);
+  const changeValue = formatSigned(quote.d, 2);
+  const changePct = formatSigned(quote.dp, 2);
+  return `💵 *${ticker}* | Precio: ${price} | Cambio diario: ${changeValue} (${changePct}%)`;
+}
+
 async function fetchDailyCandles(ticker) {
   if (!process.env.FINNHUB_API_KEY) return [];
   const to = Math.floor(Date.now() / 1000);
@@ -390,6 +407,8 @@ async function buildOnDemandAnalysis({ query, ticker }) {
     marketPulseLines: marketPulse.map((n, i) => `${i + 1}) ${n.title} (${n.source})`).join("\n"),
     tickerNewsLines: tickerNews.map((n, i) => `${i + 1}) ${(n.headline || "").trim()} | ${(n.source || "").trim()}`).join("\n"),
     currentPrice: currentPrice || "N/D",
+    dailyChangeValue: quote?.d,
+    dailyChangePercent: quote?.dp,
     supports: levels.supports.join(", ") || "N/D",
     resistances: levels.resistances.join(", ") || "N/D",
   });
@@ -400,7 +419,10 @@ async function buildOnDemandAnalysis({ query, ticker }) {
     messages: [{ role: "user", content: prompt }],
   });
 
-  return resp.choices[0].message.content?.trim() || "⚠️ No pude construir el analisis.";
+  return {
+    analysisText: resp.choices[0].message.content?.trim() || "⚠️ No pude construir el analisis.",
+    quote,
+  };
 }
 
 async function claimNextAnalysisJob() {
@@ -466,13 +488,15 @@ async function processAnalysisJob(job) {
   );
 
   try {
-    const text = await buildOnDemandAnalysis({
+    const { analysisText, quote } = await buildOnDemandAnalysis({
       query: job.user_query,
       ticker,
     });
+    const priceLine = formatPriceLine(ticker, quote);
+    const finalText = `${priceLine}\n\n${analysisText}`;
 
-    await finishJobSuccess(job.id, text);
-    await sendTelegramMessage(job.chat_id, `📊 *Analisis ${ticker}*\n\n${text}`);
+    await finishJobSuccess(job.id, finalText);
+    await sendTelegramMessage(job.chat_id, `📊 *Analisis ${ticker}*\n\n${finalText}`);
   } catch (err) {
     await finishJobFail(job.id, err.message || String(err));
     await sendTelegramMessage(job.chat_id, `⚠️ Fallo el analisis de ${ticker}. Error: ${err.message || err}`);
