@@ -1,7 +1,9 @@
 module.exports = {
   summarizeArticlePrompt: ({ title, url, content }) => `
 Eres un analista estilo Wall Street y maestro.
-Resume y estructura el análisis de manera educativa (sin señales de compra/venta).
+Resume y estructura el analisis de manera educativa (sin senales de compra/venta).
+Escribe en espanol profesional.
+Usa emojis de objetos para mejorar legibilidad (ej: 📊 📰 ⚠️), nunca caras.
 
 DEVUELVE EN JSON con estas llaves:
 {
@@ -14,7 +16,7 @@ DEVUELVE EN JSON con estas llaves:
 }
 
 Contexto:
-- Título: ${title}
+- Titulo: ${title}
 - URL: ${url}
 
 Contenido (puede estar truncado):

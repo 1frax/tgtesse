@@ -1,26 +1,27 @@
 require("dotenv").config();
 const TelegramBot = require("node-telegram-bot-api");
 const OpenAI = require("openai");
-const axios = require("axios");
 const db = require("./db");
-const { startHourly } = require("./hourly_worker");
 const { fetchMarketAuxNews, fetchFinnhubNews, normalizeNews } = require("./news");
 
-// ====== VALIDACIÓN ENV ======
+// ====== VALIDACION ENV ======
 if (!process.env.TELEGRAM_BOT_TOKEN) {
-  console.error("❌ FALTA TELEGRAM_BOT_TOKEN");
+  console.error("[ERROR] FALTA TELEGRAM_BOT_TOKEN");
   process.exit(1);
 }
 if (!process.env.OPENAI_API_KEY) {
-  console.error("❌ FALTA OPENAI_API_KEY");
+  console.error("[ERROR] FALTA OPENAI_API_KEY");
   process.exit(1);
 }
+
+// Cargar worker solo despues de validar llaves criticas.
+const { startHourly } = require("./hourly_worker");
 
 // ====== INIT ======
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-console.log("🤖 TESSE AI BOT (Telegram) ONLINE");
+console.log("[OK] TESSE AI BOT (Telegram) ONLINE");
 
 // ====== MEMORIA EN RAM (MVP) ======
 const memory = new Map(); // chatId -> [{role, content}, ...]
@@ -37,7 +38,7 @@ function pushHistory(chatId, role, content) {
   memory.set(chatId, arr);
 }
 
-// ====== CACHE DE NOTICIAS (EVITA SATURACIÓN DE APIS) ======
+// ====== CACHE DE NOTICIAS (EVITA SATURACION DE APIS) ======
 const NEWS_TTL_MS = 1000 * 60 * 5; // 5 minutos
 const newsCache = {
   fetchedAt: 0,
@@ -63,7 +64,7 @@ async function getMergedNewsCached({ limit = 6 } = {}) {
 
 async function getTopNewsText() {
   const merged = await getMergedNewsCached({ limit: 6 });
-  if (!merged.length) return "No encontré noticias recientes (o la API falló).";
+  if (!merged.length) return "No encontre noticias recientes (o la API fallo).";
 
   const lines = merged.slice(0, 6).map((n, i) => {
     return `${i + 1}) ${n.title}\n   Fuente: ${n.source}\n   Link: ${n.url}`;
@@ -76,7 +77,6 @@ async function getTopNewsText() {
 async function analyzeText(chatId, question, { mode = "normal" } = {}) {
   const history = getHistory(chatId);
 
-  // Solo metemos noticias cuando el usuario quiere "pulso/monitor/tradear"
   let newsContext = "";
   if (mode === "pulse") {
     try {
@@ -93,25 +93,28 @@ async function analyzeText(chatId, question, { mode = "normal" } = {}) {
   const system = `
 Eres TESSE AI: analista de mercados estilo Wall Street, con mentalidad de trader y habilidades de maestro.
 Reglas:
-- Educativo solamente (sin señales de compra/venta, sin garantías).
-- Siempre en español.
-- No repitas el mismo macro-resumen si el usuario hace follow-up. Avanza la conversación.
-- Si el usuario pregunta “qué monitorear / qué tradear / qué vigilar”, responde con watchlist, triggers y escenarios.
+- Educativo solamente (sin senales de compra/venta, sin garantias).
+- Siempre en espanol.
+- Estilo profesional, claro y concreto.
+- Usa emojis de objetos para guiar lectura (ej: 📊 🧭 📰 ⚠️ 💵 ⏱️), nunca caras/emojis humanos.
+- No satures con emojis: maximo 1 por encabezado o bullet clave.
+- No repitas el mismo macro-resumen si el usuario hace follow-up. Avanza la conversacion.
+- Si el usuario pregunta "que monitorear / que tradear / que vigilar", responde con watchlist, triggers y escenarios.
 
 Si mode="pulse":
-- Enfócate en la próxima 1–4 horas (drivers, watchlist, triggers, riesgos).
+- Enfocate en la proxima 1-4 horas (drivers, watchlist, triggers, riesgos).
 - Respuesta compacta y accionable (educativa).
 Si mode="normal":
-- Responde directo (sin repetir secciones si no hacen falta).
+- Responde directo y util, sin relleno.
 
 Formato:
 - mode="pulse":
   1) TL;DR
   2) Drivers (3-5 bullets)
   3) Watchlist (3-6 activos/temas)
-  4) Triggers/Escenarios (alcista/base/bajista) + invalidación
+  4) Triggers/Escenarios (alcista/base/bajista) + invalidacion
   5) Checklist (riesgo, eventos, timeframe)
-- mode="normal": respuesta directa y útil (sin relleno).
+- mode="normal": respuesta directa y util (sin relleno).
 `.trim();
 
   const user = `
@@ -140,12 +143,12 @@ async function analyzeImage(imageUrl, caption = "") {
       {
         role: "system",
         content:
-          "Eres TESSE AI, analista educativo estilo Wall Street. Analiza gráficas y explica estructura, niveles, tendencia/rango, y escenarios. Sin asesoría financiera.",
+          "Eres TESSE AI, analista educativo estilo Wall Street. Analiza graficas y explica estructura, niveles, tendencia/rango y escenarios. Usa estilo profesional en espanol con emojis de objetos (sin caras).",
       },
       {
         role: "user",
         content: [
-          { type: "text", text: caption || "Analiza esta gráfica y dame el contexto." },
+          { type: "text", text: caption || "Analiza esta grafica y dame el contexto." },
           { type: "image_url", image_url: { url: imageUrl } },
         ],
       },
@@ -159,7 +162,7 @@ async function analyzeImage(imageUrl, caption = "") {
 bot.onText(/\/start/, (msg) => {
   bot.sendMessage(
     msg.chat.id,
-    "🤖 TESSE AI listo.\n\nComandos:\n/news = noticias recientes\n/pulse = pulso (drivers + watchlist + escenarios)\n/subscribe = updates cada hora\n/unsubscribe = parar updates\n\nTambién puedes mandar una gráfica 📊"
+    "📌 TESSE AI listo.\n\nComandos:\n/news = noticias recientes\n/pulse = pulso (drivers + watchlist + escenarios)\n/subscribe = updates cada hora\n/unsubscribe = parar updates\n\nTambien puedes mandar una grafica 📊"
   );
 });
 
@@ -170,22 +173,22 @@ bot.onText(/\/news/, async (msg) => {
     const text = await getTopNewsText();
     bot.sendMessage(chatId, text, { parse_mode: "Markdown" });
   } catch (e) {
-    console.error("❌ /news error:", e.message);
-    bot.sendMessage(chatId, "❌ Falló al traer noticias. Revisa API keys o límites.");
+    console.error("[ERROR] /news:", e.message);
+    bot.sendMessage(chatId, "⚠️ Fallo al traer noticias. Revisa API keys o limites.");
   }
 });
 
 bot.onText(/\/pulse/, async (msg) => {
   const chatId = msg.chat.id;
   try {
-    bot.sendMessage(chatId, "🧠 Generando Market Pulse (contexto)...");
+    bot.sendMessage(chatId, "⏱️ Generando Market Pulse (contexto)...");
     pushHistory(chatId, "user", "/pulse");
-    const reply = await analyzeText(chatId, "Dame el pulso del mercado y qué vale la pena vigilar/tradear.", { mode: "pulse" });
+    const reply = await analyzeText(chatId, "Dame el pulso del mercado y que vale la pena vigilar/tradear.", { mode: "pulse" });
     pushHistory(chatId, "assistant", reply);
-    bot.sendMessage(chatId, `🤖 *TESSE AI*\n\n${reply}`, { parse_mode: "Markdown" });
+    bot.sendMessage(chatId, `📊 *TESSE AI*\n\n${reply}`, { parse_mode: "Markdown" });
   } catch (e) {
-    console.error("❌ /pulse error:", e.message);
-    bot.sendMessage(chatId, "❌ No pude generar el pulse.");
+    console.error("[ERROR] /pulse:", e.message);
+    bot.sendMessage(chatId, "⚠️ No pude generar el pulse.");
   }
 });
 
@@ -210,47 +213,42 @@ function setActive(chatId, active) {
 
 bot.onText(/\/subscribe/, (msg) => {
   upsertSubscriber(msg.chat.id);
-  bot.sendMessage(msg.chat.id, "✅ Suscrito. Recibirás updates cada hora.");
+  bot.sendMessage(msg.chat.id, "✅ Suscrito. Recibiras updates cada hora.");
 });
 
 bot.onText(/\/unsubscribe/, (msg) => {
   setActive(msg.chat.id, false);
-  bot.sendMessage(msg.chat.id, "🛑 Ya no recibirás updates.");
+  bot.sendMessage(msg.chat.id, "🛑 Ya no recibiras updates.");
 });
 
-// ====== TEXT MESSAGES (ROUTER ANTI-REPETICIÓN) ======
+// ====== TEXT MESSAGES ======
 bot.on("message", async (msg) => {
   try {
     const chatId = msg.chat.id;
 
-    // IGNORE photos here (handled below)
     if (msg.photo) return;
 
     const text = msg.text;
     if (!text) return;
 
-    // ✅ No mandar comandos a OpenAI
     if (text.startsWith("/")) return;
 
     const lower = text.toLowerCase().trim();
 
-    // 1) Saludos -> menú corto (evita macro-resumen repetido)
-    if (["hola", "hi", "buenas", "qué tal", "que tal", "hey"].includes(lower)) {
+    if (["hola", "hi", "buenas", "que tal", "hey"].includes(lower)) {
       return bot.sendMessage(
         chatId,
-        "👋 ¿Qué quieres hacer?\n\n- Escribe: *noticias* (headlines)\n- Escribe: *pulso* (drivers + watchlist + escenarios)\n- Pregunta por un activo: “SPX hoy”, “BTC contexto”\n- Manda una gráfica 📊",
+        "🧭 Que quieres hacer?\n\n- Escribe: *noticias* (headlines)\n- Escribe: *pulso* (drivers + watchlist + escenarios)\n- Pregunta por un activo: \"SPX hoy\", \"BTC contexto\"\n- Manda una grafica 📊",
         { parse_mode: "Markdown" }
       );
     }
 
-    // 2) Noticias rápidas
     if (lower === "noticias" || lower.includes("news")) {
       bot.sendMessage(chatId, "📰 Buscando noticias...");
       const newsText = await getTopNewsText();
       return bot.sendMessage(chatId, newsText, { parse_mode: "Markdown" });
     }
 
-    // 3) Pulso / qué monitorear / qué tradear
     const wantsPulse =
       lower.includes("pulso") ||
       lower.includes("monitor") ||
@@ -261,23 +259,22 @@ bot.on("message", async (msg) => {
       lower.includes("interesante");
 
     if (wantsPulse) {
-      bot.sendMessage(chatId, "🧠 Armando contexto (pulso de mercado)...");
+      bot.sendMessage(chatId, "⏱️ Armando contexto (pulso de mercado)...");
       pushHistory(chatId, "user", text);
       const reply = await analyzeText(chatId, text, { mode: "pulse" });
       pushHistory(chatId, "assistant", reply);
-      return bot.sendMessage(chatId, `🤖 *TESSE AI*\n\n${reply}`, { parse_mode: "Markdown" });
+      return bot.sendMessage(chatId, `📊 *TESSE AI*\n\n${reply}`, { parse_mode: "Markdown" });
     }
 
-    // 4) Normal
     bot.sendMessage(chatId, "⏳ Analizando...");
 
     pushHistory(chatId, "user", text);
     const reply = await analyzeText(chatId, text, { mode: "normal" });
     pushHistory(chatId, "assistant", reply);
 
-    bot.sendMessage(chatId, `🤖 *TESSE AI*\n\n${reply}`, { parse_mode: "Markdown" });
+    bot.sendMessage(chatId, `📊 *TESSE AI*\n\n${reply}`, { parse_mode: "Markdown" });
   } catch (err) {
-    console.error("❌ Error texto:", err.message);
+    console.error("[ERROR] texto:", err.message);
   }
 });
 
@@ -293,15 +290,15 @@ bot.on("photo", async (msg) => {
     const file = await bot.getFile(fileId);
     const imageUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${file.file_path}`;
 
-    console.log("🖼️ Imagen recibida");
+    console.log("[INFO] Imagen recibida");
 
-    bot.sendMessage(chatId, "📊 Analizando gráfica...");
+    bot.sendMessage(chatId, "📈 Analizando grafica...");
 
     const reply = await analyzeImage(imageUrl, caption);
 
-    bot.sendMessage(chatId, `🤖 *TESSE AI*\n\n${reply}`, { parse_mode: "Markdown" });
+    bot.sendMessage(chatId, `📊 *TESSE AI*\n\n${reply}`, { parse_mode: "Markdown" });
   } catch (err) {
-    console.error("❌ Error imagen:", err.message);
+    console.error("[ERROR] imagen:", err.message);
   }
 });
 
