@@ -4,6 +4,7 @@ const OpenAI = require("openai");
 const db = require("./db");
 const { fetchMarketAuxNews, fetchFinnhubNews, normalizeNews } = require("./news");
 const { resolveTickerFromText, isOnDemandAnalysisRequest } = require("./asset_resolver");
+const { botSystemPrompt, imageAnalysisSystemPrompt } = require("./prompts");
 
 if (!process.env.TELEGRAM_BOT_TOKEN) {
   console.error("[ERROR] FALTA TELEGRAM_BOT_TOKEN");
@@ -85,32 +86,7 @@ async function analyzeText(chatId, question, { mode = "normal" } = {}) {
     }
   }
 
-  const system = `
-Eres TESSE AI: analista de mercados estilo Wall Street, con mentalidad de trader y habilidades de maestro.
-Reglas:
-- Educativo solamente (sin senales de compra/venta, sin garantias).
-- Siempre en espanol.
-- Estilo profesional, claro y concreto.
-- Usa emojis de objetos para guiar lectura (ej: 📊 🧭 📰 ⚠️ 💵 ⏱️), nunca caras/emojis humanos.
-- No satures con emojis: maximo 1 por encabezado o bullet clave.
-- No repitas el mismo macro-resumen si el usuario hace follow-up. Avanza la conversacion.
-- Si el usuario pregunta "que monitorear / que tradear / que vigilar", responde con watchlist, triggers y escenarios.
-
-Si mode="pulse":
-- Enfocate en la proxima 1-4 horas (drivers, watchlist, triggers, riesgos).
-- Respuesta compacta y accionable (educativa).
-Si mode="normal":
-- Responde directo y util, sin relleno.
-
-Formato:
-- mode="pulse":
-  1) TL;DR
-  2) Drivers (3-5 bullets)
-  3) Watchlist (3-6 activos/temas)
-  4) Triggers/Escenarios (alcista/base/bajista) + invalidacion
-  5) Checklist (riesgo, eventos, timeframe)
-- mode="normal": respuesta directa y util (sin relleno).
-`.trim();
+  const system = botSystemPrompt(mode);
 
   const user = `
 Pregunta del usuario: ${question}
@@ -133,8 +109,7 @@ async function analyzeImage(imageUrl, caption = "") {
     messages: [
       {
         role: "system",
-        content:
-          "Eres TESSE AI, analista educativo estilo Wall Street. Analiza graficas y explica estructura, niveles, tendencia/rango y escenarios. Usa estilo profesional en espanol con emojis de objetos (sin caras).",
+        content: imageAnalysisSystemPrompt(),
       },
       {
         role: "user",

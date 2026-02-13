@@ -3,7 +3,7 @@ const axios = require("axios");
 const { chromium } = require("playwright");
 const db = require("./db");
 const OpenAI = require("openai");
-const { summarizeArticlePrompt } = require("./prompts");
+const { summarizeArticlePrompt, onDemandTickerPrompt } = require("./prompts");
 const { fetchMarketAuxNews, fetchFinnhubNews, normalizeNews } = require("./news");
 const { resolveTickerFromText } = require("./asset_resolver");
 
@@ -384,36 +384,15 @@ async function buildOnDemandAnalysis({ query, ticker }) {
   const currentPrice = quote?.c || null;
   const levels = computeSupportResistance(candles, currentPrice);
 
-  const prompt = `
-Eres un analista de mercado profesional.
-Responde en espanol con tono ejecutivo y emojis de objetos (sin caras).
-Consulta del cliente: ${query}
-Ticker objetivo: ${ticker}
-
-Contexto de mercado general:
-${marketPulse.map((n, i) => `${i + 1}) ${n.title} (${n.source})`).join("\n")}
-
-Noticias del ticker:
-${tickerNews.map((n, i) => `${i + 1}) ${(n.headline || "").trim()} | ${(n.source || "").trim()}`).join("\n")}
-
-Precio actual:
-${currentPrice || "N/D"}
-
-Soportes detectados:
-${levels.supports.join(", ") || "N/D"}
-
-Resistencias detectadas:
-${levels.resistances.join(", ") || "N/D"}
-
-Entrega este formato:
-1) TL;DR
-2) Pulso general de mercado (3-5 bullets)
-3) Que esta pasando con ${ticker} (drivers concretos)
-4) Setup tecnico: soportes/resistencias + escenarios alcista/base/bajista + invalidacion
-5) Checklist operativo 1-4 horas (riesgo, gatillos, evento clave)
-
-No des senales garantizadas. Educativo.
-`;
+  const prompt = onDemandTickerPrompt({
+    query,
+    ticker,
+    marketPulseLines: marketPulse.map((n, i) => `${i + 1}) ${n.title} (${n.source})`).join("\n"),
+    tickerNewsLines: tickerNews.map((n, i) => `${i + 1}) ${(n.headline || "").trim()} | ${(n.source || "").trim()}`).join("\n"),
+    currentPrice: currentPrice || "N/D",
+    supports: levels.supports.join(", ") || "N/D",
+    resistances: levels.resistances.join(", ") || "N/D",
+  });
 
   const resp = await openai.chat.completions.create({
     model: "gpt-4o-mini",
