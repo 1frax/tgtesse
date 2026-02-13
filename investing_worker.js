@@ -33,8 +33,8 @@ function getOpenAIClient() {
   return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 }
 
-function alreadySaved(url) {
-  const row = db.prepare("SELECT id FROM research_items WHERE url=?").get(url);
+async function alreadySaved(url) {
+  const row = await db.one("SELECT id FROM research_items WHERE url = $1", [url]);
   return !!row;
 }
 
@@ -159,30 +159,52 @@ async function summarizeAndStore({ source, title, url, author, published_at, con
     };
   }
 
-  db.prepare(`
-    INSERT INTO research_items
-      (source, title, url, author, published_at, tickers, summary, thesis, catalysts, risks, score, status)
-    VALUES
-      (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new')
-  `).run(
-    source,
-    title,
-    url,
-    author || "",
-    published_at || "",
-    JSON.stringify(parsed.tickers || []),
-    parsed.tldr || "",
-    JSON.stringify(parsed.thesis || []),
-    JSON.stringify(parsed.catalysts || []),
-    JSON.stringify(parsed.risks || []),
-    Number(parsed.score || 50)
+  const result = await db.run(
+    `
+      INSERT INTO research_items
+        (source, title, url, author, published_at, tickers, summary, thesis, catalysts, risks, score, status)
+      VALUES
+        ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::jsonb, $9::jsonb, $10::jsonb, $11, 'new')
+      ON CONFLICT (url) DO NOTHING
+    `,
+    [
+      source,
+      title,
+      url,
+      author || "",
+      published_at || "",
+      JSON.stringify(parsed.tickers || []),
+      parsed.tldr || "",
+      JSON.stringify(parsed.thesis || []),
+      JSON.stringify(parsed.catalysts || []),
+      JSON.stringify(parsed.risks || []),
+      Number(parsed.score || 50),
+    ]
   );
 
-  console.log("[OK] Guardado:", title);
+  if (result.rowCount > 0) {
+    console.log("[OK] Guardado:", title);
+    return true;
+  }
+
+  return false;
 }
 
 async function runOnce() {
   console.log("[INFO] Iniciando investing worker...");
+  await db.init();
+
+  const startedRun = await db.one(
+    `
+      INSERT INTO worker_runs (worker_name, status)
+      VALUES ('investing', 'running')
+      RETURNING id
+    `
+  );
+  const runId = startedRun?.id;
+
+  let processedCount = 0;
+  let insertedCount = 0;
 
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({ storageState: STORAGE }).catch(() => browser.newContext());
@@ -194,20 +216,20 @@ async function runOnce() {
 
     if (!candidates.length) {
       console.warn("[WARN] No se encontraron articulos candidatos. Ajusta URL/selectores de Investing.");
-      return;
     }
 
     for (const c of candidates) {
       const cleanUrl = normalizeUrl(c.href);
-      if (alreadySaved(cleanUrl)) continue;
+      if (await alreadySaved(cleanUrl)) continue;
 
+      processedCount += 1;
       const articleData = await extractArticleData(context, { ...c, href: cleanUrl });
       if (!articleData.body || articleData.body.length < 200) {
         console.warn("[WARN] Contenido corto o vacio, se omite:", cleanUrl);
         continue;
       }
 
-      await summarizeAndStore({
+      const inserted = await summarizeAndStore({
         source: "InvestingPro",
         title: articleData.title || c.text,
         url: cleanUrl,
@@ -215,16 +237,50 @@ async function runOnce() {
         published_at: articleData.published_at,
         content: articleData.body,
       });
+
+      if (inserted) insertedCount += 1;
+    }
+
+    if (runId) {
+      await db.run(
+        `
+          UPDATE worker_runs
+          SET status = 'success',
+              finished_at = NOW(),
+              processed_count = $1,
+              inserted_count = $2
+          WHERE id = $3
+        `,
+        [processedCount, insertedCount, runId]
+      );
     }
 
     await context.storageState({ path: STORAGE });
+  } catch (err) {
+    if (runId) {
+      await db.run(
+        `
+          UPDATE worker_runs
+          SET status = 'failed',
+              finished_at = NOW(),
+              processed_count = $1,
+              inserted_count = $2,
+              error = $3
+          WHERE id = $4
+        `,
+        [processedCount, insertedCount, String(err.message || err), runId]
+      );
+    }
+    throw err;
   } finally {
     await browser.close();
+    await db.close();
   }
 }
 
 function printDoctor() {
   const checks = [
+    ["DATABASE_URL", !!process.env.DATABASE_URL],
     ["OPENAI_API_KEY", !!process.env.OPENAI_API_KEY],
     ["INVESTING_EMAIL", !!process.env.INVESTING_EMAIL],
     ["INVESTING_PASSWORD", !!process.env.INVESTING_PASSWORD],

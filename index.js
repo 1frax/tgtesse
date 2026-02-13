@@ -4,7 +4,6 @@ const OpenAI = require("openai");
 const db = require("./db");
 const { fetchMarketAuxNews, fetchFinnhubNews, normalizeNews } = require("./news");
 
-// ====== VALIDACION ENV ======
 if (!process.env.TELEGRAM_BOT_TOKEN) {
   console.error("[ERROR] FALTA TELEGRAM_BOT_TOKEN");
   process.exit(1);
@@ -14,18 +13,15 @@ if (!process.env.OPENAI_API_KEY) {
   process.exit(1);
 }
 
-// Cargar worker solo despues de validar llaves criticas.
 const { startHourly } = require("./hourly_worker");
 
-// ====== INIT ======
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 console.log("[OK] TESSE AI BOT (Telegram) ONLINE");
 
-// ====== MEMORIA EN RAM (MVP) ======
-const memory = new Map(); // chatId -> [{role, content}, ...]
-const MAX_TURNS = 12; // ~6 turnos (user+assistant)
+const memory = new Map();
+const MAX_TURNS = 12;
 
 function getHistory(chatId) {
   return memory.get(chatId) || [];
@@ -38,8 +34,7 @@ function pushHistory(chatId, role, content) {
   memory.set(chatId, arr);
 }
 
-// ====== CACHE DE NOTICIAS (EVITA SATURACION DE APIS) ======
-const NEWS_TTL_MS = 1000 * 60 * 5; // 5 minutos
+const NEWS_TTL_MS = 1000 * 60 * 5;
 const newsCache = {
   fetchedAt: 0,
   merged: [],
@@ -47,7 +42,7 @@ const newsCache = {
 
 async function getMergedNewsCached({ limit = 6 } = {}) {
   const now = Date.now();
-  const isFresh = newsCache.merged.length > 0 && (now - newsCache.fetchedAt) < NEWS_TTL_MS;
+  const isFresh = newsCache.merged.length > 0 && now - newsCache.fetchedAt < NEWS_TTL_MS;
   if (isFresh) return newsCache.merged.slice(0, limit);
 
   const [a, b] = await Promise.all([
@@ -73,7 +68,6 @@ async function getTopNewsText() {
   return `📰 *Top noticias recientes*\n\n${lines.join("\n\n")}`;
 }
 
-// ====== HELPERS (OPENAI) ======
 async function analyzeText(chatId, question, { mode = "normal" } = {}) {
   const history = getHistory(chatId);
 
@@ -125,11 +119,7 @@ ${mode === "pulse" ? `\nNoticias recientes (contexto):\n${newsContext}` : ""}
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     temperature: 0.3,
-    messages: [
-      { role: "system", content: system },
-      ...history,
-      { role: "user", content: user },
-    ],
+    messages: [{ role: "system", content: system }, ...history, { role: "user", content: user }],
   });
 
   return response.choices[0].message.content?.trim() || "No pude generar respuesta.";
@@ -158,167 +148,186 @@ async function analyzeImage(imageUrl, caption = "") {
   return response.choices[0].message.content?.trim() || "No pude analizar la imagen.";
 }
 
-// ====== COMANDOS ======
-bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(
-    msg.chat.id,
-    "📌 TESSE AI listo.\n\nComandos:\n/news = noticias recientes\n/pulse = pulso (drivers + watchlist + escenarios)\n/subscribe = updates cada hora\n/unsubscribe = parar updates\n\nTambien puedes mandar una grafica 📊"
+async function upsertSubscriber(chatId) {
+  await db.run(
+    `
+      INSERT INTO subscribers (chat_id, is_active)
+      VALUES ($1, TRUE)
+      ON CONFLICT (chat_id) DO UPDATE SET
+        is_active = TRUE,
+        updated_at = NOW()
+    `,
+    [String(chatId)]
   );
-});
-
-bot.onText(/\/news/, async (msg) => {
-  const chatId = msg.chat.id;
-  try {
-    bot.sendMessage(chatId, "📰 Buscando noticias...");
-    const text = await getTopNewsText();
-    bot.sendMessage(chatId, text, { parse_mode: "Markdown" });
-  } catch (e) {
-    console.error("[ERROR] /news:", e.message);
-    bot.sendMessage(chatId, "⚠️ Fallo al traer noticias. Revisa API keys o limites.");
-  }
-});
-
-bot.onText(/\/pulse/, async (msg) => {
-  const chatId = msg.chat.id;
-  try {
-    bot.sendMessage(chatId, "⏱️ Generando Market Pulse (contexto)...");
-    pushHistory(chatId, "user", "/pulse");
-    const reply = await analyzeText(chatId, "Dame el pulso del mercado y que vale la pena vigilar/tradear.", { mode: "pulse" });
-    pushHistory(chatId, "assistant", reply);
-    bot.sendMessage(chatId, `📊 *TESSE AI*\n\n${reply}`, { parse_mode: "Markdown" });
-  } catch (e) {
-    console.error("[ERROR] /pulse:", e.message);
-    bot.sendMessage(chatId, "⚠️ No pude generar el pulse.");
-  }
-});
-
-// ====== SUBSCRIPCIONES ======
-function upsertSubscriber(chatId) {
-  db.prepare(`
-    INSERT INTO subscribers(chat_id, is_active)
-    VALUES(?, 1)
-    ON CONFLICT(chat_id) DO UPDATE SET
-      is_active=1,
-      updated_at=datetime('now')
-  `).run(String(chatId));
 }
 
-function setActive(chatId, active) {
-  db.prepare(`
-    UPDATE subscribers
-    SET is_active=?, updated_at=datetime('now')
-    WHERE chat_id=?
-  `).run(active ? 1 : 0, String(chatId));
+async function setActive(chatId, active) {
+  await db.run(
+    `
+      UPDATE subscribers
+      SET is_active = $1,
+          updated_at = NOW()
+      WHERE chat_id = $2
+    `,
+    [active, String(chatId)]
+  );
 }
 
-bot.onText(/\/subscribe/, (msg) => {
-  upsertSubscriber(msg.chat.id);
-  bot.sendMessage(msg.chat.id, "✅ Suscrito. Recibiras updates cada hora.");
-});
+async function main() {
+  await db.init();
 
-bot.onText(/\/unsubscribe/, (msg) => {
-  setActive(msg.chat.id, false);
-  bot.sendMessage(msg.chat.id, "🛑 Ya no recibiras updates.");
-});
+  bot.onText(/\/start/, (msg) => {
+    bot.sendMessage(
+      msg.chat.id,
+      "📌 TESSE AI listo.\n\nComandos:\n/news = noticias recientes\n/pulse = pulso (drivers + watchlist + escenarios)\n/subscribe = updates cada hora\n/unsubscribe = parar updates\n\nTambien puedes mandar una grafica 📊"
+    );
+  });
 
-// ====== TEXT MESSAGES ======
-bot.on("message", async (msg) => {
-  try {
+  bot.onText(/\/news/, async (msg) => {
     const chatId = msg.chat.id;
-
-    if (msg.photo) return;
-
-    const text = msg.text;
-    if (!text) return;
-
-    if (text.startsWith("/")) return;
-
-    const lower = text.toLowerCase().trim();
-
-    if (["hola", "hi", "buenas", "que tal", "hey"].includes(lower)) {
-      return bot.sendMessage(
-        chatId,
-        "🧭 Que quieres hacer?\n\n- Escribe: *noticias* (headlines)\n- Escribe: *pulso* (drivers + watchlist + escenarios)\n- Pregunta por un activo: \"SPX hoy\", \"BTC contexto\"\n- Manda una grafica 📊",
-        { parse_mode: "Markdown" }
-      );
-    }
-
-    if (lower === "noticias" || lower.includes("news")) {
+    try {
       bot.sendMessage(chatId, "📰 Buscando noticias...");
-      const newsText = await getTopNewsText();
-      return bot.sendMessage(chatId, newsText, { parse_mode: "Markdown" });
+      const text = await getTopNewsText();
+      bot.sendMessage(chatId, text, { parse_mode: "Markdown" });
+    } catch (e) {
+      console.error("[ERROR] /news:", e.message);
+      bot.sendMessage(chatId, "⚠️ Fallo al traer noticias. Revisa API keys o limites.");
     }
+  });
 
-    const wantsPulse =
-      lower.includes("pulso") ||
-      lower.includes("monitor") ||
-      lower.includes("vigilar") ||
-      lower.includes("tradear") ||
-      lower.includes("operar") ||
-      lower.includes("contexto") ||
-      lower.includes("interesante");
-
-    if (wantsPulse) {
-      bot.sendMessage(chatId, "⏱️ Armando contexto (pulso de mercado)...");
-      pushHistory(chatId, "user", text);
-      const reply = await analyzeText(chatId, text, { mode: "pulse" });
-      pushHistory(chatId, "assistant", reply);
-      return bot.sendMessage(chatId, `📊 *TESSE AI*\n\n${reply}`, { parse_mode: "Markdown" });
-    }
-
-    bot.sendMessage(chatId, "⏳ Analizando...");
-
-    pushHistory(chatId, "user", text);
-    const reply = await analyzeText(chatId, text, { mode: "normal" });
-    pushHistory(chatId, "assistant", reply);
-
-    bot.sendMessage(chatId, `📊 *TESSE AI*\n\n${reply}`, { parse_mode: "Markdown" });
-  } catch (err) {
-    console.error("[ERROR] texto:", err.message);
-  }
-});
-
-// ====== IMAGE MESSAGES ======
-bot.on("photo", async (msg) => {
-  try {
+  bot.onText(/\/pulse/, async (msg) => {
     const chatId = msg.chat.id;
-    const caption = msg.caption || "";
+    try {
+      bot.sendMessage(chatId, "⏱️ Generando Market Pulse (contexto)...");
+      pushHistory(chatId, "user", "/pulse");
+      const reply = await analyzeText(chatId, "Dame el pulso del mercado y que vale la pena vigilar/tradear.", { mode: "pulse" });
+      pushHistory(chatId, "assistant", reply);
+      bot.sendMessage(chatId, `📊 *TESSE AI*\n\n${reply}`, { parse_mode: "Markdown" });
+    } catch (e) {
+      console.error("[ERROR] /pulse:", e.message);
+      bot.sendMessage(chatId, "⚠️ No pude generar el pulse.");
+    }
+  });
 
-    const photo = msg.photo[msg.photo.length - 1];
-    const fileId = photo.file_id;
+  bot.onText(/\/subscribe/, async (msg) => {
+    try {
+      await upsertSubscriber(msg.chat.id);
+      bot.sendMessage(msg.chat.id, "✅ Suscrito. Recibiras updates cada hora.");
+    } catch (err) {
+      console.error("[ERROR] /subscribe:", err.message);
+      bot.sendMessage(msg.chat.id, "⚠️ No pude activar tu suscripcion.");
+    }
+  });
 
-    const file = await bot.getFile(fileId);
-    const imageUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${file.file_path}`;
+  bot.onText(/\/unsubscribe/, async (msg) => {
+    try {
+      await setActive(msg.chat.id, false);
+      bot.sendMessage(msg.chat.id, "🛑 Ya no recibiras updates.");
+    } catch (err) {
+      console.error("[ERROR] /unsubscribe:", err.message);
+      bot.sendMessage(msg.chat.id, "⚠️ No pude desactivar tu suscripcion.");
+    }
+  });
 
-    console.log("[INFO] Imagen recibida");
+  bot.on("message", async (msg) => {
+    try {
+      const chatId = msg.chat.id;
+      if (msg.photo) return;
 
-    bot.sendMessage(chatId, "📈 Analizando grafica...");
+      const text = msg.text;
+      if (!text || text.startsWith("/")) return;
 
-    const reply = await analyzeImage(imageUrl, caption);
+      const lower = text.toLowerCase().trim();
 
-    bot.sendMessage(chatId, `📊 *TESSE AI*\n\n${reply}`, { parse_mode: "Markdown" });
-  } catch (err) {
-    console.error("[ERROR] imagen:", err.message);
-  }
-});
+      if (["hola", "hi", "buenas", "que tal", "hey"].includes(lower)) {
+        return bot.sendMessage(
+          chatId,
+          "🧭 Que quieres hacer?\n\n- Escribe: *noticias* (headlines)\n- Escribe: *pulso* (drivers + watchlist + escenarios)\n- Pregunta por un activo: \"SPX hoy\", \"BTC contexto\"\n- Manda una grafica 📊",
+          { parse_mode: "Markdown" }
+        );
+      }
 
-// ====== START HOURLY WORKER ======
-startHourly(bot);
+      if (lower === "noticias" || lower.includes("news")) {
+        bot.sendMessage(chatId, "📰 Buscando noticias...");
+        const newsText = await getTopNewsText();
+        return bot.sendMessage(chatId, newsText, { parse_mode: "Markdown" });
+      }
 
-const express = require("express");
-const app = express();
+      const wantsPulse =
+        lower.includes("pulso") ||
+        lower.includes("monitor") ||
+        lower.includes("vigilar") ||
+        lower.includes("tradear") ||
+        lower.includes("operar") ||
+        lower.includes("contexto") ||
+        lower.includes("interesante");
 
-app.get("/", (_, res) => res.status(200).send("OK - TESSE BOT RUNNING"));
+      if (wantsPulse) {
+        bot.sendMessage(chatId, "⏱️ Armando contexto (pulso de mercado)...");
+        pushHistory(chatId, "user", text);
+        const reply = await analyzeText(chatId, text, { mode: "pulse" });
+        pushHistory(chatId, "assistant", reply);
+        return bot.sendMessage(chatId, `📊 *TESSE AI*\n\n${reply}`, { parse_mode: "Markdown" });
+      }
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Health server on", PORT));
+      bot.sendMessage(chatId, "⏳ Analizando...");
+      pushHistory(chatId, "user", text);
+      const reply = await analyzeText(chatId, text, { mode: "normal" });
+      pushHistory(chatId, "assistant", reply);
+      bot.sendMessage(chatId, `📊 *TESSE AI*\n\n${reply}`, { parse_mode: "Markdown" });
+    } catch (err) {
+      console.error("[ERROR] texto:", err.message);
+    }
+  });
 
-process.on("SIGTERM", async () => {
-  console.log("SIGTERM received. Shutting down...");
-  try { await bot.stopPolling(); } catch (e) {}
-  process.exit(0);
-});
+  bot.on("photo", async (msg) => {
+    try {
+      const chatId = msg.chat.id;
+      const caption = msg.caption || "";
 
-bot.on("polling_error", (err) => {
-  console.error("polling_error:", err?.message || err);
+      const photo = msg.photo[msg.photo.length - 1];
+      const fileId = photo.file_id;
+
+      const file = await bot.getFile(fileId);
+      const imageUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${file.file_path}`;
+
+      console.log("[INFO] Imagen recibida");
+      bot.sendMessage(chatId, "📈 Analizando grafica...");
+
+      const reply = await analyzeImage(imageUrl, caption);
+      bot.sendMessage(chatId, `📊 *TESSE AI*\n\n${reply}`, { parse_mode: "Markdown" });
+    } catch (err) {
+      console.error("[ERROR] imagen:", err.message);
+    }
+  });
+
+  startHourly(bot);
+
+  const express = require("express");
+  const app = express();
+
+  app.get("/", (_, res) => res.status(200).send("OK - TESSE BOT RUNNING"));
+
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => console.log("Health server on", PORT));
+
+  process.on("SIGTERM", async () => {
+    console.log("SIGTERM received. Shutting down...");
+    try {
+      await bot.stopPolling();
+    } catch (e) {}
+    try {
+      await db.close();
+    } catch (e) {}
+    process.exit(0);
+  });
+
+  bot.on("polling_error", (err) => {
+    console.error("polling_error:", err?.message || err);
+  });
+}
+
+main().catch((err) => {
+  console.error("[FATAL] Error iniciando bot:", err.message);
+  process.exit(1);
 });

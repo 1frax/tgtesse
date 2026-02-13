@@ -66,7 +66,7 @@ ${JSON.stringify(news).slice(0, 8000)}
 }
 
 async function sendPulse(bot) {
-  const subs = db.prepare("SELECT chat_id FROM subscribers WHERE is_active=1").all();
+  const subs = await db.many("SELECT chat_id FROM subscribers WHERE is_active = TRUE");
   if (!subs.length) return;
 
   try {
@@ -79,7 +79,7 @@ async function sendPulse(bot) {
           parse_mode: "Markdown",
         });
       } catch (e) {
-        db.prepare("UPDATE subscribers SET is_active=0 WHERE chat_id=?").run(String(s.chat_id));
+        await db.run("UPDATE subscribers SET is_active = FALSE, updated_at = NOW() WHERE chat_id = $1", [String(s.chat_id)]);
       }
     }
   } catch (err) {

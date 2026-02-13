@@ -18,27 +18,55 @@ function auth(req, res, next) {
 }
 
 // --- API ---
-app.get("/api/items", auth, (req, res) => {
-  const status = req.query.status || "new";
-  const rows = db
-    .prepare(`SELECT * FROM research_items WHERE status=? ORDER BY created_at DESC LIMIT 200`)
-    .all(status);
-  res.json(rows);
+app.get("/api/items", auth, async (req, res) => {
+  try {
+    const status = req.query.status || "new";
+    const rows = await db.many(
+      "SELECT * FROM research_items WHERE status = $1 ORDER BY created_at DESC LIMIT 200",
+      [status]
+    );
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.get("/api/items/:id", auth, (req, res) => {
-  const row = db.prepare(`SELECT * FROM research_items WHERE id=?`).get(req.params.id);
-  res.json(row || null);
+app.get("/api/items/:id", auth, async (req, res) => {
+  try {
+    const row = await db.one("SELECT * FROM research_items WHERE id = $1", [req.params.id]);
+    res.json(row || null);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.post("/api/items/:id/approve", auth, (req, res) => {
-  db.prepare(`UPDATE research_items SET status='approved' WHERE id=?`).run(req.params.id);
-  res.json({ ok: true });
+app.post("/api/items/:id/approve", auth, async (req, res) => {
+  try {
+    await db.run("UPDATE research_items SET status = 'approved' WHERE id = $1", [req.params.id]);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.post("/api/items/:id/ignore", auth, (req, res) => {
-  db.prepare(`UPDATE research_items SET status='ignored' WHERE id=?`).run(req.params.id);
-  res.json({ ok: true });
+app.post("/api/items/:id/ignore", auth, async (req, res) => {
+  try {
+    await db.run("UPDATE research_items SET status = 'ignored' WHERE id = $1", [req.params.id]);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/worker-runs", auth, async (_, res) => {
+  try {
+    const rows = await db.many(
+      "SELECT * FROM worker_runs WHERE worker_name = 'investing' ORDER BY started_at DESC LIMIT 50"
+    );
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // --- Dashboard HTML (MVP) ---
@@ -73,4 +101,12 @@ app.get("/", (req, res) => {
   `);
 });
 
-app.listen(PORT, () => console.log(`🖥️ Dashboard en http://localhost:${PORT}`));
+async function main() {
+  await db.init();
+  app.listen(PORT, () => console.log(`🖥️ Dashboard en http://localhost:${PORT}`));
+}
+
+main().catch((err) => {
+  console.error("[FATAL] dashboard init:", err.message);
+  process.exit(1);
+});

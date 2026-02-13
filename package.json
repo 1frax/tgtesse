@@ -7,6 +7,7 @@
     "start": "node index.js",
     "dev": "node index.js",
     "worker:investing": "node investing_worker.js --once",
+    "worker:doctor": "node investing_worker.js --doctor",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "engines": {
@@ -25,6 +26,7 @@
     "node-cron": "^4.2.1",
     "node-telegram-bot-api": "^0.63.0",
     "openai": "^6.18.0",
+    "pg": "^8.18.0",
     "playwright": "^1.58.2",
     "twilio": "^5.12.0"
   }
