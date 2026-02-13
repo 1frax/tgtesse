@@ -69,6 +69,21 @@ app.get("/api/worker-runs", auth, async (_, res) => {
   }
 });
 
+app.get("/api/jobs", auth, async (req, res) => {
+  try {
+    const status = req.query.status ? String(req.query.status) : null;
+    const rows = status
+      ? await db.many(
+          "SELECT * FROM analysis_jobs WHERE status = $1 ORDER BY created_at DESC LIMIT 100",
+          [status]
+        )
+      : await db.many("SELECT * FROM analysis_jobs ORDER BY created_at DESC LIMIT 100");
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- Dashboard HTML (MVP) ---
 app.get("/", (req, res) => {
   res.send(`

@@ -97,6 +97,26 @@ async function init() {
 
   await query(`CREATE INDEX IF NOT EXISTS idx_worker_runs_worker ON worker_runs(worker_name, started_at DESC);`);
 
+  await query(`
+    CREATE TABLE IF NOT EXISTS analysis_jobs (
+      id BIGSERIAL PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      user_query TEXT NOT NULL,
+      ticker TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      priority INTEGER NOT NULL DEFAULT 100,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      started_at TIMESTAMPTZ,
+      finished_at TIMESTAMPTZ,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      error TEXT,
+      result_text TEXT
+    );
+  `);
+
+  await query(`CREATE INDEX IF NOT EXISTS idx_analysis_jobs_status_created ON analysis_jobs(status, created_at ASC);`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_analysis_jobs_chat_created ON analysis_jobs(chat_id, created_at DESC);`);
+
   initialized = true;
   console.log("[OK] Postgres schema listo.");
 }

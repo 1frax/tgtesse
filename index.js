@@ -3,6 +3,7 @@ const TelegramBot = require("node-telegram-bot-api");
 const OpenAI = require("openai");
 const db = require("./db");
 const { fetchMarketAuxNews, fetchFinnhubNews, normalizeNews } = require("./news");
+const { resolveTickerFromText, isOnDemandAnalysisRequest } = require("./asset_resolver");
 
 if (!process.env.TELEGRAM_BOT_TOKEN) {
   console.error("[ERROR] FALTA TELEGRAM_BOT_TOKEN");
@@ -173,14 +174,47 @@ async function setActive(chatId, active) {
   );
 }
 
+async function enqueueAnalysisJob(chatId, text) {
+  const ticker = resolveTickerFromText(text);
+  const row = await db.one(
+    `
+      INSERT INTO analysis_jobs (chat_id, user_query, ticker, status)
+      VALUES ($1, $2, $3, 'pending')
+      RETURNING id, ticker
+    `,
+    [String(chatId), text, ticker]
+  );
+  return row;
+}
+
 async function main() {
   await db.init();
 
   bot.onText(/\/start/, (msg) => {
     bot.sendMessage(
       msg.chat.id,
-      "📌 TESSE AI listo.\n\nComandos:\n/news = noticias recientes\n/pulse = pulso (drivers + watchlist + escenarios)\n/subscribe = updates cada hora\n/unsubscribe = parar updates\n\nTambien puedes mandar una grafica 📊"
+      "📌 TESSE AI listo.\n\nComandos:\n/news = noticias recientes\n/pulse = pulso (drivers + watchlist + escenarios)\n/subscribe = updates cada hora\n/unsubscribe = parar updates\n\nConsulta on-demand:\n- \"que esta pasando con PayPal\"\n- \"analiza PYPL\"\n\nTambien puedes mandar una grafica 📊"
     );
+  });
+
+  bot.onText(/\/analyze(?:\s+(.+))?/i, async (msg, match) => {
+    const chatId = msg.chat.id;
+    const query = (match && match[1] ? String(match[1]).trim() : "").trim();
+    if (!query) {
+      return bot.sendMessage(chatId, "⚠️ Uso: /analyze <activo o ticker>. Ejemplo: /analyze PayPal");
+    }
+
+    try {
+      const job = await enqueueAnalysisJob(chatId, query);
+      const tickerLabel = job?.ticker ? ` (${job.ticker})` : "";
+      bot.sendMessage(
+        chatId,
+        `🛠️ Solicitud recibida${tickerLabel}. Job #${job.id} en cola.\n⏱️ Estoy levantando análisis de mercado + setup técnico.`
+      );
+    } catch (err) {
+      console.error("[ERROR] /analyze:", err.message);
+      bot.sendMessage(chatId, "⚠️ No pude crear el job de análisis.");
+    }
   });
 
   bot.onText(/\/news/, async (msg) => {
@@ -268,6 +302,15 @@ async function main() {
         const reply = await analyzeText(chatId, text, { mode: "pulse" });
         pushHistory(chatId, "assistant", reply);
         return bot.sendMessage(chatId, `📊 *TESSE AI*\n\n${reply}`, { parse_mode: "Markdown" });
+      }
+
+      if (isOnDemandAnalysisRequest(text)) {
+        const job = await enqueueAnalysisJob(chatId, text);
+        const tickerLabel = job?.ticker ? ` (${job.ticker})` : "";
+        return bot.sendMessage(
+          chatId,
+          `🛠️ Solicitud recibida${tickerLabel}. Job #${job.id} en cola.\n⏱️ Estoy levantando análisis de mercado + setup técnico.`
+        );
       }
 
       bot.sendMessage(chatId, "⏳ Analizando...");

@@ -7,6 +7,7 @@
     "start": "node index.js",
     "dev": "node index.js",
     "worker:investing": "node investing_worker.js --once",
+    "worker:jobs": "node investing_worker.js --jobs",
     "worker:doctor": "node investing_worker.js --doctor",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
