@@ -162,6 +162,10 @@ async function enqueueAnalysisJob(chatId, text) {
   return row;
 }
 
+function shouldRouteToOnDemand(text) {
+  return isOnDemandAnalysisRequest(text) || !!resolveTickerFromText(text);
+}
+
 async function main() {
   await db.init();
 
@@ -262,6 +266,15 @@ async function main() {
         return bot.sendMessage(chatId, newsText, { parse_mode: "Markdown" });
       }
 
+      if (shouldRouteToOnDemand(text)) {
+        const job = await enqueueAnalysisJob(chatId, text);
+        const tickerLabel = job?.ticker ? ` (${job.ticker})` : "";
+        return bot.sendMessage(
+          chatId,
+          `🛠️ Solicitud recibida${tickerLabel}. Job #${job.id} en cola.\n⏱️ Estoy levantando análisis de mercado + setup técnico.`
+        );
+      }
+
       const wantsPulse =
         lower.includes("pulso") ||
         lower.includes("monitor") ||
@@ -277,15 +290,6 @@ async function main() {
         const reply = await analyzeText(chatId, text, { mode: "pulse" });
         pushHistory(chatId, "assistant", reply);
         return bot.sendMessage(chatId, `📊 *TESSE AI*\n\n${reply}`, { parse_mode: "Markdown" });
-      }
-
-      if (isOnDemandAnalysisRequest(text)) {
-        const job = await enqueueAnalysisJob(chatId, text);
-        const tickerLabel = job?.ticker ? ` (${job.ticker})` : "";
-        return bot.sendMessage(
-          chatId,
-          `🛠️ Solicitud recibida${tickerLabel}. Job #${job.id} en cola.\n⏱️ Estoy levantando análisis de mercado + setup técnico.`
-        );
       }
 
       bot.sendMessage(chatId, "⏳ Analizando...");
